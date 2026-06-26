@@ -150,3 +150,33 @@ def test_get_weekly_stats_billable_mock(mocker):
     assert stats['billable_worked'] == 20.0
     assert stats['billable_target'] == 20.0 # 40 * 0.5
     assert stats['target'] == 40.0
+
+def test_get_weekly_stats_forecast_only(mocker):
+    config = {
+        "access_token": "tk", 
+        "account_id": "acc", 
+        "target_hours": 40.0,
+    }
+    
+    # Mock Harvest User (weekly_capacity of 35 hours)
+    mocker.patch("src.harvest.get_current_user", return_value={"id": 1, "weekly_capacity": 35 * 3600})
+    
+    # Mock Harvest Time Entries (Return 30 hours total)
+    mocker.patch("src.harvest.get_time_entries", return_value={
+        "time_entries": [{"hours": 30}]
+    })
+
+    # Fix current date
+    mock_now = datetime(2026, 3, 11) # Wednesday
+    mocker.patch("src.harvest.datetime", mocker.Mock(wraps=datetime))
+    import src.harvest
+    src.harvest.datetime.now.return_value = mock_now
+
+    stats = get_weekly_stats(config, forecast_only=True)
+    
+    assert stats['worked'] == 30.0
+    assert stats['scheduled'] == 35.0
+    assert stats['target'] == 35.0 # matches scheduled because forecast_only is True
+    assert stats['remaining'] == 5.0
+    assert stats['gap'] == 0.0 # target equals scheduled
+

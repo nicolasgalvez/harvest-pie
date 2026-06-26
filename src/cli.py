@@ -7,8 +7,9 @@ import sys
 @click.group(invoke_without_command=True)
 @click.option('--force-worked', type=float, help='Force worked hours (skip Harvest API)')
 @click.option('--force-forecast', type=float, help='Force forecast hours (skip Forecast API)')
+@click.option('--forecast-only', is_flag=True, help='Use forecast hours as target')
 @click.pass_context
-def cli(ctx, force_worked, force_forecast):
+def cli(ctx, force_worked, force_forecast, forecast_only):
     """Harvest Pie CLI - Weekly hours worked vs scheduled."""
     if ctx.invoked_subcommand is None:
         if not is_configured():
@@ -18,7 +19,13 @@ def cli(ctx, force_worked, force_forecast):
         
         try:
             config = get_config()
-            stats = get_weekly_stats(config, force_worked=force_worked, force_forecast=force_forecast)
+            is_forecast_only = forecast_only or config.get('forecast_only', False)
+            stats = get_weekly_stats(
+                config, 
+                force_worked=force_worked, 
+                force_forecast=force_forecast, 
+                forecast_only=is_forecast_only
+            )
             render_summary(stats)
             render_pie_chart(stats, config)
         except Exception as e:
@@ -38,11 +45,11 @@ def cli(ctx, force_worked, force_forecast):
 @click.option('--color-remaining', help='Hex color for remaining hours')
 @click.option('--color-under-target', help='Hex color for under target hours')
 @click.option('--user-agent', help='Custom User-Agent string')
-def config(token, account, forecast_account, forecast_token, scheduled_hours, target_hours, billable_target, default_capacity, color_worked, color_remaining, color_under_target, user_agent):
+@click.option('--forecast-only/--no-forecast-only', default=None, help='Use forecast hours as target by default')
+def config(token, account, forecast_account, forecast_token, scheduled_hours, target_hours, billable_target, default_capacity, color_worked, color_remaining, color_under_target, user_agent, forecast_only):
     """Configure Harvest and Forecast API access."""
     current_config = get_config()
     
-    # ... Harvest Config unchanged ...
     if not token and "access_token" not in current_config:
         token = click.prompt('Harvest Personal Access Token')
     if token:
@@ -85,6 +92,9 @@ def config(token, account, forecast_account, forecast_token, scheduled_hours, ta
 
     if user_agent:
         update_config("user_agent", user_agent)
+        
+    if forecast_only is not None:
+        update_config("forecast_only", forecast_only)
         
     click.echo("Configuration saved to config.json")
 

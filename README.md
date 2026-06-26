@@ -41,6 +41,7 @@ uv run harvest-pie config [OPTIONS]
 -   `--color-worked`: Hex color for worked hours (Default: Sky Blue `#56B4E9`).
 -   `--color-remaining`: Hex color for remaining hours (Default: Reddish Purple `#CC79A7`).
 -   `--color-under-target`: Hex color for "Under Target" alerts (Default: Orange `#E69F00`).
+-   `--forecast-only/--no-forecast-only`: Use forecast hours as target by default instead of configured target hours.
 
 Example:
 ```bash
@@ -58,6 +59,7 @@ uv run harvest-pie
 You can bypass API calls by forcing values directly on the command line:
 -   `--force-worked [hours]`: Skips Harvest API and uses this value.
 -   `--force-forecast [hours]`: Skips Forecast API and uses this value.
+-   `--forecast-only`: Uses forecast hours as target for this run.
 
 Example:
 ```bash

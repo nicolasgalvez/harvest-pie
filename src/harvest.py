@@ -6,6 +6,86 @@ BASE_URL = "https://api.harvestapp.com/v2"
 FORECAST_URL = "https://api.forecastapp.com"
 DEFAULT_USER_AGENT = "Harvest Pie CLI (https://github.com/swichers/harvest-pie)"
 
+class HarvestService:
+    def __init__(self, config):
+        self.config = config
+
+    def get_weekly_stats(self, force_worked=None, force_forecast=None, forecast_only=False):
+        # Current week dates (Monday to Sunday)
+        now = datetime.now()
+        # Normalize today to start of day
+        today = datetime(now.year, now.month, now.day)
+        start_of_week = today - timedelta(days=today.weekday())
+        end_of_week = start_of_week + timedelta(days=6)
+
+        harvest_user_id = None
+        if force_worked is None:
+            harvest_user = get_current_user(self.config)
+            harvest_user_id = harvest_user['id']
+
+        # 1. Determine scheduled hours (Forecast/Manual/Capacity)
+        if force_forecast is not None:
+            scheduled_hours = force_forecast
+        else:
+            # Default fallback
+            default_cap = self.config.get('default_capacity', 30.0)
+            # We need the harvest user if forecast is missing
+            if not harvest_user_id:
+                harvest_user = get_current_user(self.config)
+                harvest_user_id = harvest_user['id']
+
+            scheduled_hours = harvest_user.get('weekly_capacity', default_cap * 3600) / 3600.0
+
+            # Manual override in config
+            if self.config.get('scheduled_hours'):
+                scheduled_hours = float(self.config['scheduled_hours'])
+            # Try Forecast if configured
+            elif self.config.get('forecast_account_id'):
+                try:
+                    forecast_me = get_forecast_user(self.config)
+                    forecast_user_id = forecast_me['current_user']['id']
+                    assignments = get_forecast_assignments(self.config, start_of_week, end_of_week, forecast_user_id)
+
+                    forecast_total = 0
+                    for assignment in assignments.get('assignments', []):
+                        if assignment.get('person_id') != forecast_user_id:
+                            continue
+
+                        a_start = datetime.strptime(assignment['start_date'], "%Y-%m-%d")
+                        a_end = datetime.strptime(assignment['end_date'], "%Y-%m-%d")
+
+                        actual_start = max(start_of_week, a_start)
+                        actual_end = min(end_of_week, a_end)
+
+                        work_days = get_work_days_count(actual_start, actual_end)
+                        forecast_total += (assignment.get('allocation', 0) * work_days / 3600.0)
+
+                    if forecast_total > 0:
+                        scheduled_hours = forecast_total
+                except Exception:
+                    pass
+
+        # 2. Determine worked hours
+        billable_worked = 0.0
+        if force_worked is not None:
+            worked = force_worked
+        else:
+            entries = get_time_entries(self.config, start_of_week, end_of_week, harvest_user_id)
+            worked = 0.0
+            for entry in entries.get('time_entries', []):
+                worked += entry['hours']
+                if entry.get('billable', False):
+                    billable_worked += entry['hours']
+
+        # 3. Calculate target and final stats
+        target = self.config.get('target_hours', 30.0)
+        if forecast_only:
+            target = scheduled_hours
+
+        billable_target_ratio = self.config.get('billable_target_ratio')
+        return calculate_stats(worked, scheduled_hours, target, billable_worked=billable_worked, billable_target_ratio=billable_target_ratio)
+
+
 def get_headers(config):
     return {
         "Authorization": f"Bearer {config['access_token']}",
@@ -90,74 +170,9 @@ def calculate_stats(worked, scheduled, target, billable_worked=0.0, billable_tar
         "under_target": float(under_target)
     }
 
-def get_weekly_stats(config, force_worked=None, force_forecast=None):
-    # Current week dates (Monday to Sunday)
-    now = datetime.now()
-    # Normalize today to start of day
-    today = datetime(now.year, now.month, now.day)
-    start_of_week = today - timedelta(days=today.weekday())
-    end_of_week = start_of_week + timedelta(days=6)
-
-    harvest_user_id = None
-    if force_worked is None:
-        harvest_user = get_current_user(config)
-        harvest_user_id = harvest_user['id']
-
-    # 1. Determine scheduled hours (Forecast/Manual/Capacity)
-    if force_forecast is not None:
-        scheduled_hours = force_forecast
-    else:
-        # Default fallback
-        default_cap = config.get('default_capacity', 30.0)
-        # We need the harvest user if forecast is missing
-        if not harvest_user_id:
-            harvest_user = get_current_user(config)
-            harvest_user_id = harvest_user['id']
-
-        scheduled_hours = harvest_user.get('weekly_capacity', default_cap * 3600) / 3600.0
-
-        # Manual override in config
-        if config.get('scheduled_hours'):
-            scheduled_hours = float(config['scheduled_hours'])
-        # Try Forecast if configured
-        elif config.get('forecast_account_id'):
-            try:
-                forecast_me = get_forecast_user(config)
-                forecast_user_id = forecast_me['current_user']['id']
-                assignments = get_forecast_assignments(config, start_of_week, end_of_week, forecast_user_id)
-
-                forecast_total = 0
-                for assignment in assignments.get('assignments', []):
-                    if assignment.get('person_id') != forecast_user_id:
-                        continue
-
-                    a_start = datetime.strptime(assignment['start_date'], "%Y-%m-%d")
-                    a_end = datetime.strptime(assignment['end_date'], "%Y-%m-%d")
-
-                    actual_start = max(start_of_week, a_start)
-                    actual_end = min(end_of_week, a_end)
-
-                    work_days = get_work_days_count(actual_start, actual_end)
-                    forecast_total += (assignment.get('allocation', 0) * work_days / 3600.0)
-
-                if forecast_total > 0:
-                    scheduled_hours = forecast_total
-            except Exception:
-                pass
-
-    # 2. Determine worked hours
-    billable_worked = 0.0
-    if force_worked is not None:
-        worked = force_worked
-    else:
-        entries = get_time_entries(config, start_of_week, end_of_week, harvest_user_id)
-        worked = 0.0
-        for entry in entries.get('time_entries', []):
-            worked += entry['hours']
-            if entry.get('billable', False):
-                billable_worked += entry['hours']
-
-    # 3. Calculate target and final stats
-    target = config.get('target_hours', 30.0)
-    billable_target_ratio = config.get('billable_target_ratio')
-    return calculate_stats(worked, scheduled_hours, target, billable_worked=billable_worked, billable_target_ratio=billable_target_ratio)
+def get_weekly_stats(config, force_worked=None, force_forecast=None, forecast_only=False):
+    return HarvestService(config).get_weekly_stats(
+        force_worked=force_worked,
+        force_forecast=force_forecast,
+        forecast_only=forecast_only
+    )
